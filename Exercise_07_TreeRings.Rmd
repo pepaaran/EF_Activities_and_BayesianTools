@@ -17,6 +17,7 @@ We will divide this analysis into a number of steps, which we will encapsulate i
 ```{r}
 library(rjags)
 library(ecoforecastR)
+library(BayesianTools) #P#
 ```
 
 Steps 1-4 have already been done for you and leverages functions that are part of the [PEcAn system](https://pecanproject.org). Specifically, they are within PEcAn's land data R package, which can be downloaded and installed off Github using `remotes` or `devtools`. Because these steps have been done fore you, you don't need to run the following chunk of code.
@@ -292,6 +293,113 @@ for(i in 1:ni){
                               variable.names = c("x","tau_add","tau_dbh","tau_inc","mu",
                                                  "tau_ind","tau_yr","ind","year"),
                               n.iter = n.iter)
+```
+
+```{r}
+#P# The equivalent code for an implementation with BayesianTools would be:
+
+n.iter = 500                           ## INCREASE THIS NUMBER FOR ACTUAL ANALYSES **************************************
+
+## this code fuses forest inventory data with tree growth data (tree ring or dendrometer band)
+## for the same plots. Code is a rewrite of Clark et al 2007 Ecol Appl into BayesianTools
+
+DataFusionLikelihood <- function(param){
+  # PSEUDOCODE FOR NOW
+  
+  # param[1] = tau_dbh
+  # param[2] = tau_inc
+  # param[3] = mu
+  # param[4] = 
+  
+  # Data model DBH
+  dnorm(z[i,t], mean=x[i,t], sd=param[1]) # sum?
+  
+  # Data model tree rings
+  dnorm(y[i,t], mean=x[i,t]-x[i, t-1], sd=param[2])
+  
+  # Process model
+  Dnew[i,t] <- x[i, t-1] + param[3]
+  dnorm(x)
+}
+
+
+TreeDataFusionMV = "
+model{
+
+### Loop over all individuals
+for(i in 1:ni){
+  
+  #### Data Model: DBH
+  for(t in 1:nt){
+  z[i,t] ~ dnorm(x[i,t],tau_dbh)
+  }
+  
+  #### Data Model: growth
+  for(t in 2:nt){
+  inc[i,t] <- x[i,t]-x[i,t-1]
+  y[i,t] ~ dnorm(inc[i,t],tau_inc)
+  }
+  
+  #### Process Model
+  for(t in 2:nt){
+  Dnew[i,t] <- x[i,t-1] + mu
+  x[i,t]~dnorm(Dnew[i,t],tau_add)
+  }
+  
+  x[i,1] ~ dnorm(x_ic,tau_ic)
+
+}  ## end loop over individuals
+  
+  #### Priors
+  tau_dbh ~ dgamma(a_dbh,r_dbh)
+  tau_inc ~ dgamma(a_inc,r_inc)
+  tau_add ~ dgamma(a_add,r_add)
+  mu ~ dnorm(0.5,0.5)
+}"
+
+  ## state variable initial condition (subtract observed diameter increments off from the observed diameter)
+  z0 = data$z
+  for(i in 1:data$ni){
+    z0[i,] = data$z[i,ncol(data$z)] - rev(cumsum(rev(data$y[i,])))
+  }
+  
+  ## JAGS initial conditions
+  nchain = 3
+  init <- list()
+  for(i in 1:nchain){
+    y.samp = sample(data$y,length(data$y),replace=TRUE)
+    init[[i]] <- list(x = z0,
+                      tau_add=runif(1,1,5)/var(diff(y.samp),na.rm=TRUE), ## process precision
+                      tau_dbh=1,   ## DBH obs precision
+                      tau_inc=500, ## tree ring obs precision
+                      tau_ind=50,  ## individual effect
+                      tau_yr=100)  ## year effect
+    init[[i]]$year = rnorm(data$nt,0,1/sqrt(init[[i]]$tau_yr)) ## use tau_yr to draw random year effects
+    init[[i]]$ind  = rnorm(data$ni,0,1/sqrt(init[[i]]$tau_ind)) ## use tau_ind to draw random individual effects
+  }
+  
+  ## compile JAGS model
+  j.model   <- jags.model (file = textConnection(TreeDataFusionMV),
+                           data = data,
+                           inits = init,
+                           n.chains = 3)
+  ## note: this will give a WARNING (not an error) about unused tau_ind, tau_yr, ind, yr 
+  ## because we haven't included those to the JAGS code yet
+  
+  
+  ## burn-in
+  jags.out   <- coda.samples (model = j.model,
+                              variable.names = c("tau_add","tau_dbh","tau_inc","mu","tau_ind","tau_yr"),
+                              n.iter = min(n.iter,2000))
+  ## note: will also give a WARNING about tau_ind, tau_yr
+  plot(jags.out)
+  
+  ## run MCMC
+  jags.out   <- coda.samples (model = j.model,
+                              variable.names = c("x","tau_add","tau_dbh","tau_inc","mu",
+                                                 "tau_ind","tau_yr","ind","year"),
+                              n.iter = n.iter)
+
 ```
 
 Next, lets generate some diagnostic plots to look at the model. First, lets plot the posterior CI for growth and DBH and compare these to observations. Since we have scores of cores and trees, we'll pick a random subset of trees to check. 
