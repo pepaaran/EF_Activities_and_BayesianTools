@@ -3,7 +3,9 @@ title: "Chapter 6 - Hierarchical Bayes"
 output: html_document
 ---
 
-The objective of this activity is to explore basic hierarchical models.  We will focus on the most common class of hierarchical models, which are hierarchical linear models. These models are similar in structure to frequentist "mixed models", which are modelsthat include both hierarchical “random” effects and non-hierarchical “fixed” effects.  Everything that we apply below to linear models can also be applied to generalized linear models (e.g. logistic and poisson regression) and thus falls within the class of Bayesian hierarchical GLMs, which are analogous to frequentist GLMM (generalized linear mixed models), and for which all of our traditional non-hierarchical linear and GLM exist as a special case. Hierarchical approaches can also be applied to non-linear and process-based models to capture unexplained variability in any model parameters. In more advanced applications parameters can be described as varying according to some temporal or spatial autocorrelation, as opposed to the assumption of independence we assume in this simple case.
+The objective of this activity is to explore basic hierarchical models.  We will focus on the most common class of hierarchical models, which are hierarchical linear models. These models are similar in structure to frequentist "mixed models", which are models that include both hierarchical “random” effects and non-hierarchical “fixed” effects.  Everything that we apply below to linear models can also be applied to generalized linear models (e.g. logistic and poisson regression) and thus falls within the class of Bayesian hierarchical GLMs, which are analogous to frequentist GLMM (generalized linear mixed models), and for which all of our traditional non-hierarchical linear and GLM exist as a special case. Hierarchical approaches can also be applied to non-linear and process-based models to capture unexplained variability in any model parameters. In more advanced applications parameters can be described as varying according to some temporal or spatial autocorrelation, as opposed to the assumption of independence we assume in this simple case.
+
+NOTE: Pepa uses BayesianTools as the package for fitting bayesian models rather than rjags. This is what the GECO lab primarily uses in its packages too.
 
 # Case Study: Mosquito population size
 
@@ -11,15 +13,66 @@ For this activity we will look at data on mosquito abundance.  The data file “
 
 ```{r}
 dat <- read.csv("data/Mosquito.csv",header=TRUE,as.is = TRUE)
+
+library(BayesianTools)
+set.seed(123) # Set random seed and package and R versions for reproducibility
+sessionInfo()
 ```
 
 ### Task 1: 
 
 1.  Plot mosquito abundance as a function of time in a way that distinguishes the replicates and connects them through time (e.g. with lines, colors, or symbols)
+```{r}
+library(ggplot2)
+ggplot(dat, aes(x=time, y=density, color=rep)) +
+  geom_line() +
+  geom_point()
+```
 
 2.	Write and run a JAGS model to fit the overall "global" mean `mu` and standard deviation `sigma`, reporting summary statistics for both. You can use the JAGS code you developed from activity 5 for this.
+```{r}
+# Define log likelihood function for the density
+likelihood <- function(param){
+  # param[1] = mu  and  param[2] = sigma
+  singlelikelihoods = dnorm(dat$density, mean = param[1], sd = param[2], log = T)
+  return(sum(singlelikelihoods))
+}
+
+# Define posterior distributions
+setUp <- createBayesianSetup(likelihood, lower = c(0,0), upper = c(10,10))
+
+# Run MCMC and calculate marginal likelihood
+settings <- list(iterations = 3000, message = F, nrChains = 3)
+out <- runMCMC(bayesianSetup = setUp, sampler = "Metropolis", settings = settings)
+M <- marginalLikelihood(out)
+
+# Report summary statistics
+summary(out)
+plot(out)
+gelmanDiagnostics(out, plot = T)
+correlationPlot(out)
+marginalPlot(out)
+```
 
 3.	Add posterior CI and PI to the plot.
+```{r}
+# Plot posterior CI and PI
+out.mat <- getSample(out) # obtain matrix of MCMC posterior samples
+credInt <- getCredibleIntervals(out.mat, quantiles = c(0.025, 0.975))
+predInt <- getPredictiveIntervals(out.mat, model = function(x){rnorm(1, x[1], x[2])})
+
+ggplot(dat, aes(x=time, y=density, color=rep)) +
+  ylim(6.5, 8.5) +
+  geom_line() +
+  geom_point() +
+  geom_abline(slope = 0, intercept = MAP(out)$parametersMAP[1], lty = 3) +
+  geom_abline(slope = 0, intercept = credInt[1,1]) +
+  geom_abline(slope = 0, intercept = credInt[2,1]) +
+  geom_abline(slope = 0, intercept = predInt$posteriorPredictiveCredibleInterval[1,1], lty = 2) +
+  geom_abline(slope = 0, intercept = predInt$posteriorPredictiveCredibleInterval[2,1], lty = 2)
+
+
+```
 
 # Random time effect
 
@@ -35,9 +88,9 @@ Note that the version above is formatted slightly differently from the version c
 ```{r}
 head(dat)
 ```
-The variable `time` used in the code above is a vector of indices (length = nrow(dat)) matching a specific row of data to a specific `alpha.t`. Therefore, when building the `data` list that you pass into `jags.model` you'll want to add `time` and have that vector contain values in the range from 1 to 10 instead of 1995-2004. When working with long data, the easiest way to do this is to convert a column to a factor, then from a factor to an integrer
+The variable `time` used in the code above is a vector of indices (length = nrow(dat)) matching a specific row of data to a specific `alpha.t`. Therefore, when building the `data` list that you pass into `jags.model` you'll want to add `time` and have that vector contain values in the range from 1 to 10 instead of 1995-2004. When working with long data, the easiest way to do this is to convert a column to a factor, then from a factor to an integer
 ```{r}
-as.integer(as.factor(dat$time))
+dat$t <- as.integer(as.factor(dat$time))
 ```
 
 2. Update the data model to reference `Ex[t]` instead of `mu`
@@ -69,6 +122,52 @@ summary(jags.out[,sel.a])
 alpha <- jags.mat[,sel.a]
 apply(alpha,2,mean)
 ```
+
+```{r}
+# Define log likelihood function for the density with time as a random effect
+likelihood_t <- function(param){
+  # param[1] = mu,  param[2] = sigma, param[3] = tau, param[4:13] = alpha_t
+  mut <- param[1] + param[4:13]
+  llObs <- dnorm(dat$density, mean = mut[dat$t], sd = param[2], log = T)
+  llRand <- dnorm(param[4:13], mean = 0, sd = param[3], log = T)
+  return(sum(llObs) + sum(llRand))
+}
+
+# Define posterior distributions
+setUp_t <- createBayesianSetup(likelihood_t, lower = c(5,0.01,0.01,rep(-1, 10)), upper = c(10,10,10,rep(1, 10)))
+
+# Run MCMC and calculate marginal likelihood
+settings <- list(iterations = 3000, message = F, nrChains = 3)
+out_t <- runMCMC(bayesianSetup = setUp_t, sampler = "Metropolis", settings = settings)
+M_t <- marginalLikelihood(out_t)
+
+# Report summary statistics
+summary(out_t)
+plot(out_t)
+gelmanDiagnostics(out_t, plot = T)
+correlationPlot(out_t)
+
+# THIS GIVES WEIRD WARNINGS WHEN THE LIKELIHOOD IS ZERO AND LOG-LIKELIHOOD -Inf. Why?????
+```
+```{r}
+# Plot posterior CI and PI for the random effect model
+out_t.mat <- getSample(out_t) # obtain matrix of MCMC posterior samples
+credInt_t <- getCredibleIntervals(out_t.mat, quantiles = c(0.025, 0.975))
+predInt_t <- getPredictiveIntervals(out_t.mat, model = function(x){rnorm(1, x[1], x[2])})
+
+ggplot(dat, aes(x=time, y=density, color=rep)) +
+  ylim(6.5, 8.5) +
+  geom_line() +
+  geom_point() +
+  geom_abline(slope = 0, intercept = MAP(out)$parametersMAP[1], lty = 3) +
+  geom_abline(slope = 0, intercept = credInt[1,1]) +
+  geom_abline(slope = 0, intercept = credInt[2,1]) +
+  geom_abline(slope = 0, intercept = predInt$posteriorPredictiveCredibleInterval[1,1], lty = 2) +
+  geom_abline(slope = 0, intercept = predInt$posteriorPredictiveCredibleInterval[2,1], lty = 2)
+
+
+```
+
 5.	Looking at the posterior estimates for tau and sigma, how much of the variance in the mosquito densities is explained by the year effects? 
 
 6. Describe how you would modify your code to add a random `replicate` effect.

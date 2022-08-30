@@ -1,4 +1,15 @@
 ---
+title: "Exercise_05B_Regression.Rmd"
+author: "Pepa"
+date: "2022-08-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
 title: "Exercise 05B - Bayesian Regression"
 output: html_document
 ---
@@ -87,10 +98,8 @@ Our JAGS model for regression is very similar to our model from Exercise 5. Howe
 ```{r}
 univariate_regression <- "
 model{
-
   beta ~ dmnorm(b0,Vb)  	## multivariate Normal prior on vector of regression params
   prec ~ dgamma(s1,s2)    ## prior precision
-
   for(i in 1:n){
 	  mu[i] <- beta[1] + beta[2]*x[i]   	## process model
 	  y[i]  ~ dnorm(mu[i],prec)		        ## data model
@@ -103,7 +112,7 @@ model{
 
 Now that we have “data” and the model, the next task in setting up the analysis is to specify the parameters for the prior distributions.  
 
-Since beta is a vector, the prior mean, b0, is also a vector, and the prior variance is a matrix.  Since we have no prior conceptions about our data we'll select relatively weak priors, assuming a prior mean of 0 and a prior variance matrix that is diagonal (i.e. no covariances) and with a moderately large variance of 10000 (s.d. of 100).  We'll use the _diag_ command to set up a diagonal matrix that has a size of 2 and values of 10000 along the diagonal.  In practice, JAGS requires that we specify the multivariate normal in terms of a precision matrix, therefore we will compute the inverse of the prior variance matrix, vinvert,  using the _solve_ function.  For the residual error, we will specify an uninformative gamma prior on the precision with parameters s1 = 0.1 and s2 = 0.1. Finally, we'l add all of these prior parameters to the `data` object so we can pass them in to the JAGS model
+Since beta is a vector, the prior mean, b0, is also a vector, and the prior variance is a matrix.  Since we have no prior conceptions about our data we'll select relatively weak priors, assuming a prior mean of 0 and a prior variance matrix that is diagonal (i.e. no covariances) and with a moderately large variance of 10000 (s.d. of 100).  We'll use the _diag_ command to set up a diagonal matrix that has a size of 2 and values of 10000 along the diagonal.  In practice, JAGS requires that we specify the multivariate normal in terms of a precision matrix, therefore we will compute the inverse of the prior variance matrix, vinvert,  using the _solve_ function.  For the residual error, we will specify an uninformative gamma prior on the precision with parameters s1 = 0.1 and s2 = 0.1. Finally, we'll add all of these prior parameters to the `data` object so we can pass them in to the JAGS model
 
 ```{r}
 ## specify priors
@@ -157,10 +166,8 @@ There a few additional diagnostics we'll do that are not in coda, such as lookin
 ```{r}
 ## remember to assess convergence and remove burn-in before doing other diagnostics
 GBR <- gelman.plot(var.out)
-
 ## convert to matrix
 var.mat      <- as.matrix(var.out)
-
 ## Pairwise scatter plots & correlation
 pairs(var.mat)	## pairs plot to evaluate parameter correlation
 cor(var.mat)    ## correlation matrix among model parameters
@@ -172,6 +179,47 @@ cor(var.mat)    ## correlation matrix among model parameters
 * Describe and explain the parameter covariances that you observe in the pairs plot and parameter correlation matrix.
 * Compare the summary statistics for the Bayesian regression model to those from the classical regression:  summary(lm( y ~ x1 )).  This should include a comparison of the means and uncertainties of **all 3 model parameters**
 * Compare the fit parameters to the “true” parameters we used to generate the pseudo-data.  How well does the statistical analysis recover the true model?
+```{r}
+plot(var.out)
+# The MCMC seems to converge because the samples of all three chains are around the same value, fluctuating randomly. One can observe in the BGR plot that, particularly after 400 iterations, the ratio of the within-chain variance to the across-chain variance is below 1.05. 
+gelman.diag(var.out)
+# The ratio being one indicates that we have reached convergence
+
+# Remove samples from before convergence appeared.
+burnin = 400
+var.burn <- window(var.out, start = burnin)  ## remove burn-in
+plot(var.burn)                                ## check diagnostics post burn-in
+gelman.plot(var.burn)
+```
+```{r}
+summary(var.burn)
+# The estimated expected coefficients are close to the true ones
+
+# Plot marginal distributions
+var.burn.mat <- as.matrix(var.burn)
+for(cn in colnames(var.burn.mat)){
+  hist(var.burn.mat[,cn], main = paste("Histogram of", cn), breaks=20, freq=F,
+       xlab=cn)
+  lines(density(var.burn.mat[,cn]), col=2)
+  abline(v=mean(var.burn.mat[,cn]), col=2, lwd=2)
+}
+# Both plots of beta look normal, while the precision histogram is slightly skewed to the lef
+```
+```{r}
+cor(var.burn.mat)
+pairs(var.burn.mat)
+# The regression coefficients are highly correlated, but not with the precision. This is also visible on the pair plots. Furthermore, since the posterior distributions are centered, one can use the mean parameters from the marginal distributions to get the MAP estimates.
+
+```
+```{r}
+summary(var.burn)
+summary(lm(y~x1))
+# Both models coincide in the point estimate for the regression intercept and slope, and the uncertainty about this parameter estimate (the standard deviation of the parameter distribution in case of the Bayes method and the standard error of the parameter for the classical approach). Furthermore, the standard error in the Bayes summary indicates the computational MCMC error for the estimation of the posterior expected value of the parameters. Given their small values we can say that the numerical precision is high enough.
+# The Naive SE is computed as: sqrt(var(x)/length(x)) with x being the concatenated MCMC posterior samples of the three chains. It's the variance normalized by the number of samples, hence it decreases as we lengthen the time series.
+# To compare the precision estimate, we take the inverse of the residual standard error squared (ie the sum of squares / (number of observations- number of parameters)). We see also that they are very similar. For the classical analysis, we don't have information about the quality of the estimation of this precision parameter. Also, the true standard deviation parameter (sigma) for the observation error is 4, so the true precision is 0.0625. In both cases, we slightly overestimate this parameter.
+# In the Bayesian model output, we see that the true parameters always fall inside the 95% confidence intervals. 
+
+```
 
 # Regression Credible Intervals
 
@@ -216,7 +264,6 @@ Once we have the full matrix of predicted values we'll calculate the quantiles b
 ```{r}
 ci <- apply(ycred,2,quantile,c(0.025,0.5,0.975))  ## credible interval and median
 pi <- apply(ypred,2,quantile,c(0.025,0.975))		## prediction interval
-
 plot(x1,y,cex=0.5,xlim=c(0,20),ylim=c(0,50))
 lines(xpred,ci[1,],col=3,lty=2)	## lower CI
 lines(xpred,ci[2,],col=3,lwd=3)	## median
@@ -258,4 +305,82 @@ Hints: Make sure the length/dimensions of your priors and initial conditions mat
 * Report parameter summary table. 
 * Plot marginal and pairwise joint distributions. Indicate 'true' parameters on the plots
 * Compare the fit parameters to the “true” parameters we used to generate the pseudo-data.  How well does the statistical analysis recover the true model?
+```{r}
+# Define JAGS model
+multivariate_regression <- "
+model{
+  beta ~ dmnorm(b0,Vb)  	## multivariate Normal prior on vector of regression params
+  prec ~ dgamma(s1,s2)    ## prior precision
+  for(i in 1:n){
+	  mu[i] <- beta[1] + beta[2]*x1[i] + beta[3]*x2[i] +  beta[4]*x1[i]*x2[i]  	## process model
+	  y[i]  ~ dnorm(mu[i],prec)		        ## data model
+  }
+}
+"
 
+# Pass data to list format (with exact covariate names)
+data <- list(x1 = x1, x2 = x2, y = y, n = length(y))
+
+## specify priors
+data$b0 <- as.vector(c(0,0,0,0))      ## regression b means
+data$Vb <- solve(diag(10000,4))   ## regression b precisions
+data$s1 <- 0.1                    ## error prior n/2
+data$s2 <- 0.1                    ## error prior SS/2
+
+## initial conditions
+nchain = 3
+inits <- list()
+for(i in 1:nchain){
+ inits[[i]] <- list(beta = rnorm(4,0,5), prec = runif(1,1/200,1/20))
+}
+
+# Initialize model
+j.model <- jags.model(file = textConnection(multivariate_regression),
+                      data = data,
+                      inits = inits,
+                      n.chains = 3)
+
+# Sample from model
+jags.out <- coda.samples(model = j.model,
+                         variable.names = c("beta","prec"),
+                         n.iter = 5000)
+```
+
+```{r}
+# Convergence diagnostics and plots
+plot(jags.out)
+gelman.plot(jags.out)
+# The plots indicate that the model converges and we can set the burnin at 300 samples (all of the ratios fall below 1.05 for the first time). 
+
+jags.mat <- as.matrix(jags.out)
+pairs(jags.mat)
+# The pair plot indicates a strong correlation between the four regression coefficients, but not so strong with the precision.
+
+# Remove burnin
+jags.burn <-window(jags.out, start = 300)
+jags.burn.mat <- as.matrix(jags.burn)
+gelman.plot(jags.burn)
+# After removing the burnin samples, we see that the second peak in the variance ratios is much smalles. This is probably because the MCMC chains have reached the value towards which they converge (this may differ substantially from the initial seed).
+```
+```{r}
+summary(jags.burn)
+summary(lm(y~x1*x2))
+print("True regression coefficients:")
+beta
+# We see that the model does converge to the true values. The uncertainty about the model parameters is very similar to the one estimated by the frequentist linear regression because we have given the Bayes model very uninformative priors about the parameters. Hence, the data has the most weight in the estimation.
+```
+```{r}
+# Plot marginal and parwise joint distributions
+plot.marginal <- function(x, x_true, x_name){
+  hist(x, breaks=30, main = paste("Histogram of ", x_name), xlab=x_name, freq=F)
+  lines(density(x))
+  abline(v=x_true, lwd=2,col=2)
+}
+plot.marginal(jags.burn.mat[,1], beta[1], "beta1") # Slightly overestimated
+plot.marginal(jags.burn.mat[,2], beta[2], "beta2")
+plot.marginal(jags.burn.mat[,3], beta[3], "beta3")
+plot.marginal(jags.burn.mat[,4], beta[4], "beta4")
+plot.marginal(jags.burn.mat[,5], 1/sigma^2, "prec")
+
+# All of the parameters are pretty far from the truth. The intercept and the precision are okay, and they're probably the ones least affected by coviarate correlation. The model does not recover the true parameters very well, but neither does the linear regression model. How good are the predictions though? I wonder
+```

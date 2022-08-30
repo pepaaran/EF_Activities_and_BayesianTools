@@ -1,0 +1,25 @@
+---
+title: "BayesianTools package vignette"
+author: "Pepa"
+date: "2022-08-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading the BayesianTools package
+
+```{r}
+library(BayesianTools)
+
+# Set random seed and list R version and loaded packages for reproducibility
+set.seed(123)
+sessionInfo()
+```
+## The Bayesian setup
+
+`BayesianSetup` is the central object from the package. This class contains information about the model to be fit (likelihood) and the priors of the model parameters. A `BayesianSetup` object is created with the `createBayesianSetup` function, which expects a log-likelihood and (optional) a log-prior, then creates the posterior and functions for the samplers. 
+
+

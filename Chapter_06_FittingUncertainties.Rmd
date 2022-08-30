@@ -24,6 +24,10 @@ The data for this analysis are provided to you as a Rdata object that contains t
 
 ```{r, echo=FALSE}
 load("data/Ch06.RData")
+
+## Settings
+library(rjags)
+library(coda)
 ```
 
 For the first part of this analysis we will use the TDR measurements as our covariate.  We will deal with the calibration issue later in the activity.
@@ -49,12 +53,105 @@ Normally JAGS doesn't let functions be on the left-hand side of an <- but the _l
 ### Task 1: 
 
 1.  Fit the Bayesian Poisson regression model. Provide the DIC, and summary table & posterior density plots for all model parameters.  Report the burn in and effective MCMC sample size.
+```{r}
+# Define the regression model
+poisson_regression <- "
+model{
+  beta ~ dmnorm(b0,Vb)  	## multivariate Normal prior on vector of regression params
+  for(i in 1:n){
+	  log(mu[i]) <- beta[1] + beta[2]*TDR[i]   	## process model
+	  y[i]  ~ dpois(mu[i])		        ## data model
+  }
+}
+"
+
+# Put data and parameters into list
+data <- list(n = n, y = y, TDR = TDR)
+
+data$b0 <- c(0,0)
+data$Vb <- solve(diag(1000,2))
+
+# Set initial conditions
+nchain = 3
+inits <- list()
+for(i in 1:nchain){
+ inits[[i]] <- list(beta = rnorm(2,0,5))
+}
+
+# Compile the model
+j.model   <- jags.model(file = textConnection(poisson_regression),
+                             data = data,
+                             inits = inits,
+                             n.chains = nchain)
+# Run the model
+jags.out   <- coda.samples (model = j.model,
+                            variable.names = c("beta"),
+                                n.iter = 3000)  ## augmented number of iterations due to slow convergence
+```
+```{r}
+# Deviance Information Criterium
+dic.samples(j.model, n.iter = 200)
+
+# Summary of parameter estimation
+summary(jags.out)
+plot(jags.out)
+
+# Posterior density plots for model parameters
+jags.mat <- as.matrix(jags.out)
+hist(jags.mat[, 1], main = "Histogram of beta[1]", xlab="beta[1]", freq=F)
+lines(density(jags.mat[,1]))
+hist(jags.mat[, 2], main = "Histogram of beta[2]", xlab="beta[2]", freq=F)
+lines(density(jags.mat[,2]))
+
+# Burn in
+gelman.diag(jags.out) # Vlaues close to 1.05 indicate that the model has converged
+gelman.plot(jags.out)
+jags.burn <- window(jags.out, start = 2200) # The burn in period seems to end after 1500 iterations, when the variance ratio falls close to 1
+gelman.diag(jags.burn)
+gelman.plot(jags.burn)
+jags.burn.mat <- as.matrix(jags.burn)
+
+# Effective MCMC sample size (for each parameter)
+print("Effective MCMC samples sizes for beta1 and beta2")
+ro1 <- acf(jags.burn.mat[,1], lag.max = 1, type = "correlation", plot=F)$acf[2]
+n * (1 - ro1)/(1 + ro1)
+ro2 <- acf(jags.burn.mat[,2], lag.max = 1, type = "correlation", plot=F)$acf[2]
+n * (1 - ro2)/(1 + ro2) # These effective sample sizes are SO small
+```
 2.	Plot the model credible interval and predictive interval.  Be sure to include the scatterplot of the observed data.
+```{r}
+# Define samples to comptute credible y and predicted y
+nsamp <- 3000
+samp <- sample.int(nrow(jags.burn.mat),nsamp)
+TDRpred <-  seq(min(TDR), max(TDR), length.out=21) 					## sequence of TDS values we're going to make predictions for
+npred <- length(TDRpred)
+ypred <- matrix(0.0,nrow=nsamp,ncol=npred)	## storage for predictive interval
+ycred <- matrix(0.0,nrow=nsamp,ncol=npred)	## storage for credible interval
+
+for(g in seq_len(nsamp)){
+  theta = jags.burn.mat[samp[g],]
+  ycred[g,] <- exp(theta["beta[1]"] + theta["beta[2]"]*TDRpred)
+  ypred[g,] <- rpois(npred,ycred[g,])
+}
+
+ci <- apply(ycred,2,quantile,c(0.025,0.5,0.975))  ## credible interval and median
+pi <- apply(ypred,2,quantile,c(0.025,0.975))		## prediction interval
+plot(TDR,y,cex=0.5,xlim=c(min(TDR), max(TDR)),ylim=c(min(y), max(y)))
+lines(TDRpred,ci[1,],col=3,lty=2)	## lower CI
+lines(TDRpred,ci[2,],col=3,lwd=3)	## median
+lines(TDRpred,ci[3,],col=3,lty=2)	## upper CI
+lines(TDRpred,pi[1,],col=4,lty=2)	## lower PI
+lines(TDRpred,pi[2,],col=4,lty=2)	## upper PI
+```
 3.	How well does the Poisson model match the data?  Does 95% of the data fall within the 95% PI?
+```{r}
+# At plain sight, it does not look like 95% of the observed data falls inside the predictive interval. Although the trend of the prediction looks quite good, we're underestimating the uncertainty for our predictions.
+
+```
 
 ## Missing Data
 
-It is not uncommon in the real world for a small percentage of data to be missing due to any of a multitude of real-world mistakes. In many cases it is simple enough to 'drop' these data, as is the norm in classical analyses. However there are cases where this is undesirable, such as when one has a large number of covariates and you are only missing one and don't want to drop the whole row, or when individual measurements are very expensive in time or money or are otherwise irreplaceable.  From the Bayesian perspective it is possible to formally accommodate missing data by [numerically] integrating over all possible states the data can take on.  This technique is sometime referred to as imputing the missing data, or more specifically as multiple imputation because we are proposing many values the data could have been.  Doing this (not surprisingly) requires that we specify a prior distribution on the missing data itself.  However, the inference will draw on the likelihood, the other covariates, and the response data in order to formally generate the posterior distribution of the missing data. Therefore, it is the posterior that we actually using 'fill in' the missing data, not the prior.  Finally, it bears mentioning that addressing missing data requires that we meet one very important assumtion – that the data is missing at random.  If the process that caused the data to be missing is systematic or in any way related to the process we're trying to understand then we cannot impute the missing data.
+It is not uncommon in the real world for a small percentage of data to be missing due to any of a multitude of real-world mistakes. In many cases it is simple enough to 'drop' these data, as is the norm in classical analyses. However there are cases where this is undesirable, such as when one has a large number of covariates and you are only missing one and don't want to drop the whole row, or when individual measurements are very expensive in time or money or are otherwise irreplaceable.  From the Bayesian perspective it is possible to formally accommodate missing data by [numerically] integrating over all possible states the data can take on.  This technique is sometimes referred to as imputing the missing data, or more specifically as multiple imputation because we are proposing many values the data could have been.  Doing this (not surprisingly) requires that we specify a prior distribution on the missing data itself.  However, the inference will draw on the likelihood, the other covariates, and the response data in order to formally generate the posterior distribution of the missing data. Therefore, it is the posterior that we are actually using to 'fill in' the missing data, not the prior.  Finally, it bears mentioning that addressing missing data requires that we meet one very important assumption – that the data is missing at random.  If the process that caused the data to be missing is systematic or in any way related to the process we're trying to understand then we cannot impute the missing data.
 
 To show how this works:
 
@@ -66,7 +163,71 @@ To show how this works:
 
 ### Task 2: 
 4.  Report the posterior distributions of the missing TDR data.  How does this compare to the prior your specified and to the true value? 
+```{r}
+# Copy data and introduce missing values for TDR
+data.miss <- list(n = n, y = y, TDR = TDR)
+miss.index <- 3
+miss.value <- data.miss$TDR[miss.index]
+data.miss$TDR[miss.index] <- NA
 
+# Define and fit the Bayes Poisson regression model, putting a prior on the missing value
+missing_regression <- "
+model{
+  beta ~ dmnorm(b0,Vb)  	## multivariate Normal prior on vector of regression params
+  for(i in 1:n){
+	  log(mu[i]) <- beta[1] + beta[2]*TDR[i]   	## process model
+	  y[i]  ~ dpois(mu[i])		        ## data model
+  }
+  TDR[3] ~ dunif(minTDR, maxTDR)  ## uniform prior for missing value
+}
+" ## In my opinion, the prior distribution for the missing value should resemble the distribution of the observed values. In this case, it is similar to a uniform distribution but with more values in the center of the interval, so it's okay
+
+# Put data and parameters into list
+data.miss$b0 <- c(0,0)
+data.miss$Vb <- solve(diag(1000,2))
+data.miss$minTDR <- min(data.miss$TDR, na.rm = T)
+data.miss$maxTDR <- max(data.miss$TDR, na.rm = T)
+
+# Set initial conditions
+nchain = 3
+inits.miss <- list()
+for(i in 1:nchain){
+ inits.miss[[i]] <- list(beta = rnorm(2,0,5))
+}
+
+# Compile the model
+miss.model   <- jags.model(file = textConnection(missing_regression),
+                             data = data.miss,
+                             inits = inits.miss,
+                             n.chains = nchain)
+# Run the model
+miss.out   <- coda.samples (model = miss.model,
+                            variable.names = c("beta", "TDR[3]"),
+                                n.iter = 3000)
+```
+```{r}
+# Track model convergence and posterior distributions
+plot(miss.out)  ## the missing value time series looks like white noise while for the parameters, it's not so clear that the time series converges
+gelman.plot(miss.out) ## According to the variance ratios, the time series converge quite early and we can consider a burnin of 1700
+gelman.diag(miss.out) ## As we saw before, the chains for the regression parameters don't converge so clearly to the same value and even seem to diverge slightly after 2500 iterations. The time series for the parameters don't look so much like random noise, but also there's no percievable trend (apart from their correlation, so small values for beta[1] correspond with larger vales for beta[2])
+
+# Remove burn.in
+miss.out.burn <- window(miss.out, start = 1700)
+plot(miss.out.burn)
+gelman.plot(miss.out.burn)
+gelman.diag(miss.out.burn)
+```
+```{r}
+# Report posterior distribution for the missing value of TDR
+miss.mat <- as.matrix(miss.out.burn)
+hist(miss.mat[,1], breaks=30, freq=F, main="Posterior density of missing TDR value", xlab = "TDR[3]")
+lines(density(miss.mat[,1]))
+abline(v=mean(miss.mat[,1]), lwd = 2, col = "blue")
+abline(v=miss.value, col=2, lwd=2)
+x = seq(data.miss$minTDR, data.miss$maxTDR, length.out = 31)
+lines(x, dunif(x, min = data.miss$minTDR, max = data.miss$maxTDR), col = 3)
+# Blue indicates the estimated missing value, red indicates the true value and the green horizontal line is the density of the prior distribution for the missing value. Our imputation is not very good, maybe because the observed value is not close to the center of the uniform distribution. Nevertheless, the imputation is better than doing it at random
+```
 ### Poisson Regression with Errors in Variables
 
 Note: the first two models presented below are for explanation and you don't have to run them
@@ -132,6 +293,68 @@ While this model looks larger and more complicated, it really just consists of a
 ### Task 3: 
 
 5. Fit the final combined calibration/Poisson regression model and provide a summary table and posterior density plots for the model parameters.  Also report the burn in and the effective MCMC sample size.
+```{r}
+data <- list(TDRc = TDRc, SMc = SMc, TDR = TDR, y = y, n = n)
+# NOTE: The parameters for the parameter priors are hard coded in the definition of the model (eg alpha[i] ~ dnorm(0, 0.001))
+
+# Set initial conditions
+nchain = 3
+inits <- list()
+
+# # initialize using posteriors means from Task 1
+# for(i in 1:nchain){
+#  inits[[i]] <- list(beta = c(0.6, 3.3), # initialize from posteriors of beta in Task 1
+#                     sigma = c(100), # Use precision (1/var) of the SMc observations as mean initialization
+#                     alpha = c(rnorm(2, 0, 5))) # uninformative prior
+# }
+
+# initialize using posteriors from Task 1
+for(i in 1:nchain){
+ inits[[i]] <- list(beta = c(rnorm(1, 0.6, 0.11), rnorm(1, 3.3, 0.27)), # initialize from posteriors of beta in Task 1
+                    sigma = c(100), # Use precision (1/var) of the SMc observations as mean initialization
+                    alpha = c(rnorm(2, 0, 5))) # uninformative prior
+}
+
+# for(i in 1:nchain){
+#   inits[[i]] <- list(beta = c(rnorm(2, 0, 5)), # uninformative prior
+#                      sigma = c(runif(1,1/100,1/20)), # uninformative prior
+#                      alpha = c(rnorm(2, 0 ,5))) # uninformative prior
+# }
+
+# Compile the model
+pois.model   <- jags.model(file = textConnection(PoisRegPlusCalib),
+                             data = data,
+                             inits = inits,
+                             n.chains = nchain)
+# Run the model
+pois.out   <- coda.samples (model = pois.model,
+                            variable.names = c("beta", "sigma", "alpha"),
+                                n.iter = 5000)  ## augmented number of iterations due to slow convergence
+```
+```{r}
+# Summary and posterior plots
+summary(pois.out)
+
+pois.mat <- as.matrix(pois.out)
+for(x in colnames(pois.mat)){
+  hist(pois.mat[,x], breaks=30, main=paste("Posterior distribution of",x), xlab=x, freq=F)
+  lines(density(pois.mat[,x]))
+}
+
+# Diagnostic, burnin and effective sample size
+plot(pois.out)
+gelman.plot(pois.out) # The time series do not look like random noise at all and some posterior distributions have two modes, with the three chains hovering around different values
+gelman.diag(pois.out) # These values are horrible, all above 1.3 and should be below ~1.05
+
+ro <- apply(pois.mat, 2, function(x){
+  acf(x, lag.max=1, type="correlation", plot=F)$acf[2]
+})
+
+print("Effective sample size:")
+n*(1-ro)/(1+ro)
+```
+THIS SHIT DOESN'T CONVERGE AND IDK HOW TO SOLVE THE ISSUE
+
 6. Plot the model credible interval and predictive interval. Don't forget that the X-axis is now soil moisture, not TDR.
 7.	How does this fit compare to the previous Poisson regression of seedlings vs TDR in terms of the overall uncertainty in the model (width of credible and predictive intervals)?  In qualitative terms, to what degree does ignoring the uncertainty in the TDR/Soil Moisture relationship affect the uncertainty in our parameter estimates and our confidence in our model?
 

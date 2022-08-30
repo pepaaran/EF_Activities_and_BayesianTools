@@ -1,11 +1,22 @@
 ---
+title: "Exercise_05_JAGS"
+author: "Pepa"
+date: "2022-08-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
 title: "Introduction to JAGS"
 author: "Michael Dietze"
 output: html_document
 ---
 
 ```{r,echo=FALSE}
-library(rjags)
+library(rjags) # Had to install JAGS from website http://www.sourceforge.net/projects/mcmc-jags/files
 library(coda)
 ```
 
@@ -70,7 +81,7 @@ In JAGS the specification of any model begins with the word "model" and then enc
 
 ```
 model {
-  ## model goes here ##
+  ## model goes here ## 
 }
 ```
 
@@ -91,10 +102,8 @@ Putting this all together, to specify our first model of a normal likelihood and
 
 ```
 model{
-
   b ~ dmnorm(b0,Pb)     ## multivariate Normal prior on vector of regression params
   S ~ dgamma(s1,s2)    ## prior precision
-
   for(i in 1:n){
       mu[i] <- b[1] + b[2]*x[i]         ## process model
       y[i]  ~ dnorm(mu[i],S)                ## data model
@@ -108,16 +117,12 @@ Hopefully the above JAGS code seems pretty clear. However there are a few quirks
 
 ```
 model {
-
  for(i in 1:n){
    y[i]  ~ dnorm(mu[i],S)           ## data model
    mu[i] <- b[1] + b[2]*x[i]        ## process model
  }
-
  b ~ dmnorm(b0,Pb)     ## multivariate Normal prior on vector of regression params
  S ~ dgamma(s1,s2)     ## prior precision
-
-
 }
 ```
 
@@ -154,10 +159,8 @@ To start with, we need to realize that JAGS code is not identical to R code, so 
 ```{r}
 univariate_regression <- "
 model{
-
   b ~ dmnorm(b0,Vb)  	## multivariate Normal prior on vector of regression params
   S ~ dgamma(s1,s2)    ## prior precision
-
   for(i in 1:n){
 	  mu[i] <- b[1] + b[2]*x[i]   	## process model
 	  y[i]  ~ dnorm(mu[i],S)		        ## data model
@@ -173,7 +176,7 @@ To pass this model to JAGS we'll use the `rjags` function `jags.model`, which ha
 Any data analysis begins with loading and organizing the data. In this case we have two variables, `x1` and `y`, stored in a file:
 
 ```{r}
-load("data/Ex05.Part1.RData")
+load("Ex05.Part1.RData")
 plot(x1,y)
 ```
 
@@ -388,3 +391,96 @@ Using the dataset "data/Ex05.Part2.RData", extend your univariate regression to 
 -   Include relevant convergence diagnostics and plots.
 -   Report parameter summary table.
 -   Plot marginal parameter distributions and pairwise parameter correlations (stats and scatter plots).
+
+```{r}
+# Load the data
+load("Ex05.Part2.RData")
+plot(x1,y)
+plot(x2,y)
+plot(x1*x2, y)
+
+# Define JAGS model
+multivariate_regression <- "
+model{
+  b ~ dmnorm(b0,Vb)  	## multivariate Normal prior on vector of regression params
+  S ~ dgamma(s1,s2)    ## prior precision
+  for(i in 1:n){
+	  mu[i] <- b[1] + b[2]*x1[i] + b[3]*x2[i] +  b[4]*x1[i]*x2[i]  	## process model
+	  y[i]  ~ dnorm(mu[i],S)		        ## data model
+  }
+}
+"
+
+# Pass data to list format (with exact covariate names)
+data <- list(x1 = x1, x2 = x2, y = y, n = length(y))
+
+## specify priors
+data$b0 <- as.vector(c(0,0,0,0))      ## regression b means
+data$Vb <- solve(diag(10000,4))   ## regression b precisions
+data$s1 <- 0.1                    ## error prior n/2
+data$s2 <- 0.1                    ## error prior SS/2
+
+## initial conditions
+nchain = 3
+inits <- list()
+for(i in 1:nchain){
+ inits[[i]] <- list(b = rnorm(4,0,5), S = runif(1,1/200,1/20))
+}
+
+# Initialize model
+j.model <- jags.model(file = textConnection(multivariate_regression),
+                      data = data,
+                      inits = inits,
+                      n.chains = 3)
+
+# Sample from model
+jags.out <- coda.samples(model = j.model,
+                         variable.names = c("b","S"),
+                         n.iter = 5000)
+```
+
+```{r}
+# Diagnose the MCMC convergence
+plot(jags.out) # Plot sample time series and density plots
+
+gelman.diag(jags.out) # Calculate variance proportions for BGR diagnosis
+# They're close to 1 so all chains have converged, or it looks like it
+
+BGR <- gelman.plot(jags.out)
+# For S, the ratios are always below 1.05 which indicates early convergence. For the b parameters, after approcimately 500 iterations the variance ratio falls closer to 1, so we'll take a burn-in period of 500 iterations.
+```
+
+```{r}
+# Diagnose MCMC result after removing burn-in
+burnin = 500                                   ## determine convergence
+jags.burn <- window(jags.out, start = burnin)  ## remove burn-in
+plot(jags.burn) 
+# The plots have no aparent change for me
+```
+```{r}
+# Assess autocorrelation and effective sample size for the final analysis
+acfplot(jags.burn)
+# The autocorrelations are small, decreasing very fast after 1 lag already.
+effectiveSize(jags.burn)
+cumuplot(jags.burn, probs = c(0.025, 0.25, 0.5, 0.75, 0.975))
+# The confidence intervals and interquartile range seem stable with increasing number of iterations included. We see that after around 13000 iterations (effective sample size for all the parameters), the CI estimation doesn't fluctuate anymore
+
+```
+
+```{r}
+# Summary of parameter statistics
+summary(jags.burn)
+
+summary(lm(y~x1+x2+x1:x2))
+# The parameter mean estimates are very similar to the results from the frequentist model
+
+# Marginal parameter distribution plots
+out <- as.matrix(jags.burn)
+colnames(out) <- c('S', 'b[1]', 'b[2]', 'b[3]', 'b[4]')
+apply(out,2,hist)
+
+# Pair plots
+pairs(out)
+cor(out)
+# Naturally, regression coefficients are highly correlated
+```

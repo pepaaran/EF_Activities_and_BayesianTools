@@ -1,3 +1,14 @@
+---
+title: "Exercise_03_BigData"
+author: "Pepa"
+date: "2022-08-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
 Exercise 3: Tools for big data
 ========================================================
 
@@ -50,10 +61,8 @@ In this example, the file in question has an extensive header, which we skip dur
 ```
 Google Flu Trends - United States
 Copyright 2013 Google Inc.
-
 Exported data may be used for any purpose, subject to the Google Terms of Service (http://www.google.com/accounts/TOS?hl=en_US).
 If you choose to use the data, please attribute it to Google as follows: "Data Source: Google Flu Trends (http://www.google.org/flutrends)".
-
 Each week begins on the Sunday (Pacific Time) indicated for the row.
 Data for the current week will be updated each day until Saturday (Pacific Time).
 Note: To open these files in a spreadsheet application, we recommend you save each text file as a CSV spreadsheet.
@@ -62,7 +71,13 @@ For more information, please visit http://www.google.org/flutrends
 
 **Question 1:**
 
-Make a simple time-series plot of the Harvard Forest (HARV) Phenocam phenology data (gcc_90), which EFI has preprocessed an d saved here https://data.ecoforecast.org/targets/phenology/phenology-targets.csv.gz as part of the NEON forecasting challenge.  
+Make a simple time-series plot of the Harvard Forest (HARV) Phenocam phenology data (gcc_90), which EFI has preprocessed an d saved here https://data.ecoforecast.org/targets/phenology/phenology-targets.csv.gz as part of the NEON forecasting challenge.
+
+```{r}
+phen = readr::read_csv("https://data.ecoforecast.org/targets/phenology/phenology-targets.csv.gz")
+time = as.Date(phen$time[phen$siteID=="HARV"])
+plot(time,phen$gcc_90[phen$siteID=="HARV"],type='l')
+```
 
 grep, system, RegExp
 --------------------
@@ -133,6 +148,9 @@ gsub("HARV","BART",myCode[x])  ## substitute ALL: HARV for BART
 
 
 **Question 2:** Within the object myCode, find all the lines that begin with the comment character, #.
+```{r}
+grep("^#", myCode)
+```
 
 
 netCDF, wget
@@ -147,7 +165,7 @@ system("wget http://co2.aos.wisc.edu/data/cheas/wlef/netcdf/US-PFa-WLEF-TallTowe
 Next, lets open the file and look at what it contains
 ```{r}
 ## open the netCDF file
-wlef = nc_open("US-PFa-WLEF-TallTowerClean-2012-L0-vFeb2013.nc")
+wlef = nc_open("../Downloads/US-PFa-WLEF-TallTowerClean-2012-L0-vFeb2013.nc") #NOTE: Manually downloaded file and changed path
 print(wlef)    ## metadata
 ```
 
@@ -155,11 +173,9 @@ To start, lets look at the CO2 flux data, NEE_co2, which we see is stored in a m
 
 ```{r}
 NEE = ncvar_get(wlef,"NEE_co2")    ## NEE data
-
 ## matrix dimensions
 height = ncvar_get(wlef,"M_lvl")  
 doy = ncvar_get(wlef,"time")  # day of year
-
 ## close file connection
 nc_close(wlef)
 ```
@@ -177,7 +193,7 @@ Alternative, if I just wanted to get a subset of flux data (e.g. 24 hours of dat
 
 ```{r}
 start = which(doy > 220)[1]
-wlef = nc_open("US-PFa-WLEF-TallTowerClean-2012-L0-vFeb2013.nc")
+wlef = nc_open("../Downloads/US-PFa-WLEF-TallTowerClean-2012-L0-vFeb2013.nc")# Changed path again
 diurnal = ncvar_get(wlef,"NEE_co2",start=c(3,start),count=c(1,24))
 plot(diurnal,type = 'l')
 nc_close(wlef)
@@ -186,6 +202,14 @@ nc_close(wlef)
 **Question 3:** 
 
 Similar to how we can point read.csv to the URL of a text file, you can open and manipulate netCDF files on remote servers if those servers support THREDDS/OpenDAP. Furthermore, these utilities let you grab just the part of the file that you need rather than the file in it's entirety. Using this approach, download and plot the DAYMET maximum air temperature data for Harvard Forest for 2019 that's located on the ORNL DAAC server `http://thredds.daac.ornl.gov/thredds/dodsC/ornldaac/1220/mstmip_driver_global_hd_climate_tair_2004_v1.nc4`. Compare this to the phenocam data for the same year. The underlying file is quite large so make sure to grab just the subset you need. To do so you'll need to first grab the lat, lon, and time variables to find _which_ grid cell to grab for lat and lon and how many values to grab from time (i.e. _length_). 
+```{r}
+# NOTE: Found the dataset when filtering the table of contents in https://daac.ornl.gov/cgi-bin/dsviewer.pl?ds_id=1220
+# To download, I need to sign in with an account which I don't have
+
+phen2019HARV = intersect(grep("^2019", phen$time), grep("HARV", phen$siteID))
+plot(phen$time[phen2019HARV], phen$gcc_90[phen2019HARV])
+# Comparison not possible, could not get max temp data
+```
 
 Using APIs
 ----------
@@ -236,6 +260,10 @@ time = as.Date(names(EVI))
 ```
 
 **Question 4:** Plot EVI versus time and compare to the CO2 flux observations.
+```{r}
+plot(time, EVI)
+# Compared to the CO2 flux in the year, we see that CO2 flux and EVI take high values at more or less the same time. Does this make sense? No idea
+```
 
 FYI, APIs now exist for an enormous range of data sources that are available on the web, as well as a range of web-services that allow you to not just download data but to also upload data or push requests various cloud platforms.
 
@@ -279,6 +307,8 @@ More information about the EFI metadata standard can be found here https://githu
 **Question 5**
 Based on the metadata above, what were the identities of the species_1 and species_2 columns in the forecast file, what units were used, and did this forecast propagate the initial condition uncertainty for these species?
 
+Response (Pepa): Gloeotrichia echinulata and Anabaena circinalis are the identities of the forecast file. The units are population density in ratio. The initial condition uncertainty is present but not propagated.
+
 cron
 ----
 
@@ -313,4 +343,4 @@ Imagine you are working with MODIS data, but are grabbing a large region (rather
 * Write out the pseudocode/outline for how to keep the files up to date
 * Write out what the cron table would look like to schedule this job (assume the update only needs to be done weekly)
 
-
+NOTE: cron does not run for Windows so I'll ignore
