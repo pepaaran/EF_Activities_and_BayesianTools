@@ -29,13 +29,13 @@ for (i in 1:4) plotTimeSeries(observed = obs[,i],
 # Best to program in a way that we can choose easily which parameters to calibrate
 parSel = c(1:6, 12)
 
-# here is the likelihood 
+# here is the (log)likelihood 
 likelihood <- function(par, sum = TRUE){
   # set parameters that are not calibrated on default values 
   x = refPars$best
   x[parSel] = par
   predicted <- VSEM(x[1:11], PAR) # replace here VSEM with your model 
-  predicted[,1] = 1000 * predicted[,1] # this is just rescaling
+  predicted[,1] = 1000 * predicted[,1] # this is just rescaling NEE
   diff <- c(predicted[,1:4] - obs[,1:4]) # difference between observed and predicted
   # univariate normal likelihood. Note that there is a parameter involved here that is fit
   llValues <- dnorm(diff, sd = x[12], log = TRUE)  
@@ -59,7 +59,7 @@ out <- runMCMC(bayesianSetup = bayesianSetup, sampler = "DEzs", settings = setti
 plot(out)
 summary(out)
 marginalPlot(out)
-gelmanDiagnostics(out) # should be below 1.05 for all parameters to demonstrate convergence 
+gelmanDiagnostics(out, plot=T) # should be below 1.05 for all parameters to demonstrate convergence 
 
 # Posterior predictive simulations
 
@@ -111,11 +111,11 @@ bayesianSetup <- createBayesianSetup(likelihood = likelihood,
 
 # check boundaries are correct set
 bayesianSetup$prior$sampler() < refPars$lower[parSel]
-bayesianSetup$prior$sampler() > refPars$upper[parSel]
+bayesianSetup$prior$sampler() > refPars$upper[parSel] # This should all be FALSE
 
 # check prior looks similar to posterior
 x = bayesianSetup$prior$sampler(2000)
-correlationPlot(x, thin = F)
+correlationPlot(x, thin = F) # They look similar bu much more concentrated around mode
 
 out <- runMCMC(bayesianSetup = bayesianSetup, sampler = "DEzs", settings = settings)
 
@@ -133,3 +133,9 @@ plotTimeSeriesResults(sampler = out,
                       observed = obs[,1],
                       error = createError,
                       prior = T, main = "Prior predictive")
+
+# I don't get what I'm supposed to understand from these last plots.
+# What time series is being plotted? The one for NEE? It makes sense because of the
+# periodicity. And now we can see that the posterior is much closer to the prior. But
+# still, the chains have not really converged and I would say that the model is not
+# very good. How could it be improved?
